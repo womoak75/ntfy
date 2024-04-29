@@ -6,15 +6,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/mattn/go-sqlite3"
 	"github.com/stripe/stripe-go/v74"
 	"golang.org/x/crypto/bcrypt"
 	"heckel.io/ntfy/v2/log"
 	"heckel.io/ntfy/v2/util"
-	"net/netip"
-	"strings"
-	"sync"
-	"time"
 )
 
 const (
@@ -107,6 +108,7 @@ const (
 			label TEXT NOT NULL,
 			last_access INT NOT NULL,
 			last_origin TEXT NOT NULL,
+			valid_from INT NOT NULL,
 			expires INT NOT NULL,
 			PRIMARY KEY (user_id, token),
 			FOREIGN KEY (user_id) REFERENCES user (id) ON DELETE CASCADE
@@ -148,7 +150,7 @@ const (
 		FROM user u
 		JOIN user_token tk on u.id = tk.user_id
 		LEFT JOIN tier t on t.id = u.tier_id
-		WHERE tk.token = ? AND (tk.expires = 0 OR tk.expires >= ?)
+		WHERE tk.token = ? AND (tk.expires = 0 OR tk.expires >= ?) AND (tk.validFrom >= ?)
 	`
 	selectUserByStripeCustomerIDQuery = `
 		SELECT u.id, u.user, u.pass, u.role, u.prefs, u.sync_topic, u.stats_messages, u.stats_emails, u.stats_calls, u.stripe_customer_id, u.stripe_subscription_id, u.stripe_subscription_status, u.stripe_subscription_interval, u.stripe_subscription_paid_until, u.stripe_subscription_cancel_at, deleted, t.id, t.code, t.name, t.messages_limit, t.messages_expiry_duration, t.emails_limit, t.calls_limit, t.reservations_limit, t.attachment_file_size_limit, t.attachment_total_size_limit, t.attachment_expiry_duration, t.attachment_bandwidth_limit, t.stripe_monthly_price_id, t.stripe_yearly_price_id
@@ -251,9 +253,9 @@ const (
   	`
 
 	selectTokenCountQuery      = `SELECT COUNT(*) FROM user_token WHERE user_id = ?`
-	selectTokensQuery          = `SELECT token, label, last_access, last_origin, expires FROM user_token WHERE user_id = ?`
-	selectTokenQuery           = `SELECT token, label, last_access, last_origin, expires FROM user_token WHERE user_id = ? AND token = ?`
-	insertTokenQuery           = `INSERT INTO user_token (user_id, token, label, last_access, last_origin, expires) VALUES (?, ?, ?, ?, ?, ?)`
+	selectTokensQuery          = `SELECT token, label, last_access, last_origin, valid_from, expires FROM user_token WHERE user_id = ?`
+	selectTokenQuery           = `SELECT token, label, last_access, last_origin, valid_from, expires FROM user_token WHERE user_id = ? AND token = ?`
+	insertTokenQuery           = `INSERT INTO user_token (user_id, token, label, last_access, last_origin, valid_from, expires) VALUES (?, ?, ?, ?, ?, ?, ?)`
 	updateTokenExpiryQuery     = `UPDATE user_token SET expires = ? WHERE user_id = ? AND token = ?`
 	updateTokenLabelQuery      = `UPDATE user_token SET label = ? WHERE user_id = ? AND token = ?`
 	updateTokenLastAccessQuery = `UPDATE user_token SET last_access = ?, last_origin = ? WHERE token = ?`
@@ -515,7 +517,7 @@ func (a *Manager) AuthenticateToken(token string) (*User, error) {
 // CreateToken generates a random token for the given user and returns it. The token expires
 // after a fixed duration unless ChangeToken is called. This function also prunes tokens for the
 // given user, if there are too many of them.
-func (a *Manager) CreateToken(userID, label string, expires time.Time, origin netip.Addr) (*Token, error) {
+func (a *Manager) CreateToken(userID, label string, validFrom time.Time, expires time.Time, origin netip.Addr) (*Token, error) {
 	token := util.RandomLowerStringPrefix(tokenPrefix, tokenLength) // Lowercase only to support "<topic>+<token>@<domain>" email addresses
 	tx, err := a.db.Begin()
 	if err != nil {
@@ -523,7 +525,7 @@ func (a *Manager) CreateToken(userID, label string, expires time.Time, origin ne
 	}
 	defer tx.Rollback()
 	access := time.Now()
-	if _, err := tx.Exec(insertTokenQuery, userID, token, label, access.Unix(), origin.String(), expires.Unix()); err != nil {
+	if _, err := tx.Exec(insertTokenQuery, userID, token, label, access.Unix(), origin.String(), validFrom.Unix(), expires.Unix()); err != nil {
 		return nil, err
 	}
 	rows, err := tx.Query(selectTokenCountQuery, userID)
@@ -553,6 +555,7 @@ func (a *Manager) CreateToken(userID, label string, expires time.Time, origin ne
 		Label:      label,
 		LastAccess: access,
 		LastOrigin: origin,
+		ValidFrom:  validFrom,
 		Expires:    expires,
 	}, nil
 }
@@ -589,11 +592,11 @@ func (a *Manager) Token(userID, token string) (*Token, error) {
 
 func (a *Manager) readToken(rows *sql.Rows) (*Token, error) {
 	var token, label, lastOrigin string
-	var lastAccess, expires int64
+	var lastAccess, validFrom, expires int64
 	if !rows.Next() {
 		return nil, ErrTokenNotFound
 	}
-	if err := rows.Scan(&token, &label, &lastAccess, &lastOrigin, &expires); err != nil {
+	if err := rows.Scan(&token, &label, &lastAccess, &lastOrigin, &validFrom, &expires); err != nil {
 		return nil, err
 	} else if err := rows.Err(); err != nil {
 		return nil, err
@@ -607,6 +610,7 @@ func (a *Manager) readToken(rows *sql.Rows) (*Token, error) {
 		Label:      label,
 		LastAccess: time.Unix(lastAccess, 0),
 		LastOrigin: lastOriginIP,
+		ValidFrom:  time.Unix(validFrom, 0),
 		Expires:    time.Unix(expires, 0),
 	}, nil
 }
@@ -994,7 +998,7 @@ func (a *Manager) UserByStripeCustomer(stripeCustomerID string) (*User, error) {
 }
 
 func (a *Manager) userByToken(token string) (*User, error) {
-	rows, err := a.db.Query(selectUserByTokenQuery, token, time.Now().Unix())
+	rows, err := a.db.Query(selectUserByTokenQuery, token, time.Now().Unix(), time.Now().Unix())
 	if err != nil {
 		return nil, err
 	}

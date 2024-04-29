@@ -2,12 +2,13 @@ package user
 
 import (
 	"errors"
-	"github.com/stripe/stripe-go/v74"
-	"heckel.io/ntfy/v2/log"
 	"net/netip"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/stripe/stripe-go/v74"
+	"heckel.io/ntfy/v2/log"
 )
 
 // User is a struct that represents a user
@@ -62,6 +63,7 @@ type Token struct {
 	Label      string
 	LastAccess time.Time
 	LastOrigin netip.Addr
+	ValidFrom  time.Time
 	Expires    time.Time
 }
 

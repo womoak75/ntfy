@@ -297,8 +297,9 @@ type apiAccountDeleteRequest struct {
 }
 
 type apiAccountTokenIssueRequest struct {
-	Label   *string `json:"label"`
-	Expires *int64  `json:"expires"` // Unix timestamp
+	Label     *string `json:"label"`
+	Expires   *int64  `json:"expires"`   // Unix timestamp
+	ValidFrom *int64  `json:"validFrom"` // Unix timestamp
 }
 
 type apiAccountTokenUpdateRequest struct {
@@ -312,6 +313,7 @@ type apiAccountTokenResponse struct {
 	Label      string `json:"label,omitempty"`
 	LastAccess int64  `json:"last_access,omitempty"`
 	LastOrigin string `json:"last_origin,omitempty"`
+	ValidFrom  int64  `json:"validFrom,omitempty"`
 	Expires    int64  `json:"expires,omitempty"` // Unix timestamp
 }
 

@@ -3,13 +3,14 @@ package server
 import (
 	"encoding/json"
 	"errors"
-	"heckel.io/ntfy/v2/log"
-	"heckel.io/ntfy/v2/user"
-	"heckel.io/ntfy/v2/util"
 	"net/http"
 	"net/netip"
 	"strings"
 	"time"
+
+	"heckel.io/ntfy/v2/log"
+	"heckel.io/ntfy/v2/user"
+	"heckel.io/ntfy/v2/util"
 )
 
 const (
@@ -143,6 +144,7 @@ func (s *Server) handleAccountGet(w http.ResponseWriter, r *http.Request, v *vis
 					Label:      t.Label,
 					LastAccess: t.LastAccess.Unix(),
 					LastOrigin: lastOrigin,
+					ValidFrom:  t.ValidFrom.Unix(),
 					Expires:    t.Expires.Unix(),
 				})
 			}
@@ -226,6 +228,10 @@ func (s *Server) handleAccountTokenCreate(w http.ResponseWriter, r *http.Request
 	if req.Expires != nil {
 		expires = time.Unix(*req.Expires, 0)
 	}
+	validFrom := time.Now()
+	if req.ValidFrom != nil {
+		validFrom = time.Unix(*req.ValidFrom, 0)
+	}
 	u := v.User()
 	logvr(v, r).
 		Tag(tagAccount).
@@ -234,7 +240,7 @@ func (s *Server) handleAccountTokenCreate(w http.ResponseWriter, r *http.Request
 			"token_expires": expires,
 		}).
 		Debug("Creating token for user %s", u.Name)
-	token, err := s.userManager.CreateToken(u.ID, label, expires, v.IP())
+	token, err := s.userManager.CreateToken(u.ID, label, validFrom, expires, v.IP())
 	if err != nil {
 		return err
 	}
@@ -243,6 +249,7 @@ func (s *Server) handleAccountTokenCreate(w http.ResponseWriter, r *http.Request
 		Label:      token.Label,
 		LastAccess: token.LastAccess.Unix(),
 		LastOrigin: token.LastOrigin.String(),
+		ValidFrom:  token.ValidFrom.Unix(),
 		Expires:    token.Expires.Unix(),
 	}
 	return s.writeJSON(w, response)
@@ -281,6 +288,7 @@ func (s *Server) handleAccountTokenUpdate(w http.ResponseWriter, r *http.Request
 		Label:      token.Label,
 		LastAccess: token.LastAccess.Unix(),
 		LastOrigin: token.LastOrigin.String(),
+		ValidFrom:  token.ValidFrom.Unix(),
 		Expires:    token.Expires.Unix(),
 	}
 	return s.writeJSON(w, response)

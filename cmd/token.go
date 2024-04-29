@@ -5,11 +5,12 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"net/netip"
+	"time"
+
 	"github.com/urfave/cli/v2"
 	"heckel.io/ntfy/v2/user"
 	"heckel.io/ntfy/v2/util"
-	"net/netip"
-	"time"
 )
 
 func init() {
@@ -30,9 +31,10 @@ var cmdToken = &cli.Command{
 			Name:      "add",
 			Aliases:   []string{"a"},
 			Usage:     "Create a new token",
-			UsageText: "ntfy token add [--expires=<duration>] [--label=..] USERNAME",
+			UsageText: "ntfy token add [--validFrom=<duration>] [--expires=<duration>] [--label=..] USERNAME",
 			Action:    execTokenAdd,
 			Flags: []cli.Flag{
+				&cli.StringFlag{Name: "validFrom", Aliases: []string{"vf"}, Value: "", Usage: "token valid"},
 				&cli.StringFlag{Name: "expires", Aliases: []string{"e"}, Value: "", Usage: "token expires after"},
 				&cli.StringFlag{Name: "label", Aliases: []string{"l"}, Value: "", Usage: "token label"},
 			},
@@ -93,11 +95,20 @@ Examples:
 func execTokenAdd(c *cli.Context) error {
 	username := c.Args().Get(0)
 	expiresStr := c.String("expires")
+	validFromStr := c.String("validFrom")
 	label := c.String("label")
 	if username == "" {
 		return errors.New("username expected, type 'ntfy token add --help' for help")
 	} else if username == userEveryone || username == user.Everyone {
 		return errors.New("username not allowed")
+	}
+	validFrom := time.Now()
+	if validFromStr != "" {
+		var err error
+		validFrom, err = util.ParseFutureTime(validFromStr, time.Now())
+		if err != nil {
+			return err
+		}
 	}
 	expires := time.Unix(0, 0)
 	if expiresStr != "" {
@@ -117,10 +128,11 @@ func execTokenAdd(c *cli.Context) error {
 	} else if err != nil {
 		return err
 	}
-	token, err := manager.CreateToken(u.ID, label, expires, netip.IPv4Unspecified())
+	token, err := manager.CreateToken(u.ID, label, validFrom, expires, netip.IPv4Unspecified())
 	if err != nil {
 		return err
 	}
+	fmt.Fprintf(c.App.ErrWriter, "token %s created for user %s, valid from %v\n", token.Value, u.Name, validFrom.Format(time.UnixDate))
 	if expires.Unix() == 0 {
 		fmt.Fprintf(c.App.ErrWriter, "token %s created for user %s, never expires\n", token.Value, u.Name)
 	} else {
